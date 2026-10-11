@@ -1,0 +1,22 @@
+# Runs the FastAPI backend and Streamlit frontend together.
+# Ollama must already be running on the host machine (ollama serve / desktop app).
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build: .
+    command: ["streamlit", "run", "app_streamlit.py", "--server.address=0.0.0.0"]
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+    environment:
+      - API_URL=http://api:8000/ask

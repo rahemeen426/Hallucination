@@ -10,6 +10,7 @@ Ask questions like:
 - "What was Apple's total revenue in fiscal 2023?" → answered from the 10-K filing, with page citations
 - "What is AAPL trading at right now?" → answered via a live stock-price lookup
 - "How does Apple's 2023 revenue compare to Tesla's?" → retrieves both companies separately so neither gets crowded out
+- "What was Apple's revenue growth from 2022 to 2023?" → calculates the change from reported statement figures and cites the filing page
 
 Every answer generated from filings is scored two independent ways:
 - **LLM-as-judge groundedness** — a separate model call checks whether the answer's claims are actually supported by the retrieved source text
@@ -104,6 +105,9 @@ python tests/test_basic.py
   accuracy/speed tradeoff, adjustable via the `n_samples` parameter.
 - Ticker recognition in `agent.py` and company detection in `rag_core.py`
   use simple lookup tables — fine for a small demo, not a general solution.
+- Financial calculations support annual changes for revenue/net sales, net
+  income, operating income, and gross margin when both years appear in a
+  retrieved statement table; other periods and ratios are not yet supported.
 - Tool routing uses the LLM plus a keyword-based safety net (see
   `route()` in `agent.py`) because small local models are not fully
   reliable at structured classification on their own.

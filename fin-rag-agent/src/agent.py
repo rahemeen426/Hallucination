@@ -30,12 +30,24 @@ import requests
 
 try:
     from .selfcheck import selfcheck_consistency
-    from .rag_core import answer_question as rag_answer_question
+    from .rag_core import answer_question as rag_answer_question, retrieve_multi_company as rag_retrieve_company
     from .groundedness import check_groundedness
+    from .financial_calculator import (
+        build_retrieval_query,
+        calculate_from_chunks,
+        format_calculation,
+        parse_calculation_request,
+    )
 except ImportError:  # pragma: no cover - direct script execution fallback
     from selfcheck import selfcheck_consistency
-    from rag_core import answer_question as rag_answer_question
+    from rag_core import answer_question as rag_answer_question, retrieve_multi_company as rag_retrieve_company
     from groundedness import check_groundedness
+    from financial_calculator import (
+        build_retrieval_query,
+        calculate_from_chunks,
+        format_calculation,
+        parse_calculation_request,
+    )
 
 LLM_MODEL = "qwen2.5:3b"
 
@@ -83,6 +95,15 @@ def route(question: str) -> list[str]:
     filing_keywords = ["revenue", "filing", "10-k", "annual report", "risk factor", "net income", "reported", "compare"]
     if any(k in lowered for k in filing_keywords) and "filing_search" not in tools:
         tools.append("filing_search")
+
+    try:
+        parse_calculation_request(question)
+        if "calculate" not in tools:
+            tools.append("calculate")
+        if "filing_search" not in tools:
+            tools.append("filing_search")
+    except ValueError:
+        pass
 
     return tools or ["filing_search"]  # safe default if nothing matched at all
 
@@ -140,6 +161,23 @@ def tool_calculate(expression: str) -> dict:
         return {"tool": "calculate", "output": f"Error: {e}"}
 
 
+def tool_financial_calculation(question: str) -> dict:
+    try:
+        request = parse_calculation_request(question)
+        chunks = rag_retrieve_company(
+            build_retrieval_query(request), [request["company"]], top_k_each=8
+        )
+        calculation = calculate_from_chunks(request, chunks)
+        return {
+            "tool": "calculate",
+            "output": format_calculation(calculation),
+            "calculation": calculation,
+            "sources": calculation["sources"],
+        }
+    except ValueError as exc:
+        return {"tool": "calculate", "output": str(exc)}
+
+
 def extract_ticker(question: str) -> str | None:
     """Naive ticker extraction -- looks for known tickers or an ALL-CAPS token.
     Replace with a proper company->ticker lookup as you add more companies."""
@@ -158,15 +196,22 @@ def run_agent(question: str) -> dict:
 
     for tool in tools_needed:
         if tool == "filing_search":
-            tool_outputs.append(tool_filing_search(question))
+            if "calculate" not in tools_needed:
+                tool_outputs.append(tool_filing_search(question))
         elif tool == "stock_price":
             ticker = extract_ticker(question)
             if ticker:
                 tool_outputs.append(tool_stock_price(ticker))
         elif tool == "calculate":
-            pass  # natural-language expression extraction: future improvement
+            tool_outputs.append(tool_financial_calculation(question))
 
-    synthesis_prompt = f"""Question: {question}
+    calculation_result = next(
+        (tool for tool in tool_outputs if tool["tool"] == "calculate"), None
+    )
+    if calculation_result:
+        final_answer = calculation_result["output"]
+    else:
+        synthesis_prompt = f"""Question: {question}
 
 Tool results:
 {json.dumps(tool_outputs, indent=2, default=str)}
@@ -175,16 +220,20 @@ Using only the tool results above, write a clear, concise answer to the
 question. If a tool result is missing or empty, say what's missing.
 
 Answer:"""
-
-    final = ollama.generate(model=LLM_MODEL, prompt=synthesis_prompt)
-    final_answer = final["response"]
+    if not calculation_result:
+        final = ollama.generate(model=LLM_MODEL, prompt=synthesis_prompt)
+        final_answer = final["response"]
 
     # Both hallucination checks only run when filing data was actually used --
     # they're not meaningful for pure stock-price or calculation answers.
     filing_result = next((t for t in tool_outputs if t["tool"] == "filing_search"), None)
     groundedness = None
     selfcheck = None
-    if filing_result:
+    if calculation_result and calculation_result.get("calculation"):
+        groundedness = check_groundedness(
+            calculation_result["calculation"]["evidence"], final_answer
+        )
+    elif filing_result:
         groundedness = check_groundedness(filing_result["context_text"], final_answer)
         selfcheck = selfcheck_consistency(filing_result["prompt"], final_answer, n_samples=2)
 

@@ -9,6 +9,11 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from ingest import chunk_text, company_from_filename
+from financial_calculator import (
+    calculate_from_chunks,
+    format_calculation,
+    parse_calculation_request,
+)
 
 
 def test_chunk_text_respects_size():
@@ -29,8 +34,39 @@ def test_company_from_filename():
     assert company_from_filename("tesla_2023_10k.pdf") == "tesla"
 
 
+def test_financial_calculation_uses_statement_values():
+    question = "Calculate Apple's revenue growth from fiscal 2022 to fiscal 2023"
+    request = parse_calculation_request(question)
+    chunks = [{
+        "text": (
+            "Apple Inc. CONSOLIDATED STATEMENTS OF OPERATIONS (In millions) "
+            "Years ended September 30, 2023 September 24, 2022 "
+            "Total net sales 383,285 394,328 365,817 Cost of sales:"
+        ),
+        "meta": {"company": "apple", "page": 31, "source_file": "apple_2023_10k.pdf"},
+    }]
+
+    result = calculate_from_chunks(request, chunks)
+
+    assert result["start_value"] == 394328
+    assert result["end_value"] == 383285
+    assert abs(float(result["percent_change"]) + 2.8) < 0.01
+    assert "p. 31" in format_calculation(result)
+
+
+def test_financial_calculation_requires_two_years():
+    try:
+        parse_calculation_request("Calculate Apple's revenue growth in 2023")
+    except ValueError as exc:
+        assert "exactly two fiscal years" in str(exc)
+    else:
+        raise AssertionError("Expected a question with one year to be rejected")
+
+
 if __name__ == "__main__":
     test_chunk_text_respects_size()
     test_chunk_text_overlap()
     test_company_from_filename()
+    test_financial_calculation_uses_statement_values()
+    test_financial_calculation_requires_two_years()
     print("All smoke tests passed.")

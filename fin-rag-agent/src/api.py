@@ -50,7 +50,7 @@ def ask(request: QuestionRequest):
 
     sources = []
     for tool_output in result["tool_outputs"]:
-        if tool_output["tool"] == "filing_search":
+        if tool_output["tool"] in {"filing_search", "calculate"}:
             sources = tool_output.get("sources", [])
 
     return AnswerResponse(
